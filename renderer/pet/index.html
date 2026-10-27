@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DshDemon</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; }
+
+  canvas { display: block; }
+
+  /* 关闭键：默认半透明，鼠标移上来变实（窗口默认穿透，靠命中检测切换到可交互） */
+  #close {
+    position: fixed; top: 8px; right: 8px; width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    border: 0; border-radius: 50%; padding: 0; cursor: pointer;
+    font: 600 14px/1 system-ui, sans-serif; color: #fff;
+    background: rgba(30, 40, 60, .55);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+    opacity: .5; transition: opacity .15s, background .15s;
+    -webkit-user-select: none; user-select: none;
+  }
+  #close:hover { opacity: 1; background: rgba(210, 60, 60, .9); }
+  #close:active { transform: scale(.94); }
+</style>
+<script src="live2dcubismcore.min.js"></script>
+</head>
+<body>
+<button id="close" title="关闭桌宠（Esc）" aria-label="关闭桌宠">✕</button>
+<script src="bundle.js"></script>
+<script>
+  const closeBtn = document.getElementById('close');
+  closeBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (window.smallDemon) window.smallDemon.quit();
+  });
+
+  // 拖动：按住左/右键拖模型。用绝对坐标 + 固定尺寸 setBounds，避免 setPosition 在
+  // 1.75 DPI 下每次调用把窗口放大一点点。
+  let drag = null;
+  window.addEventListener('mousedown', async (e) => {
+    if (e.button !== 0 && e.button !== 2) return;
+    if (e.target && e.target.closest && e.target.closest('button')) return;
+    const bounds = window.smallDemon ? await window.smallDemon.getBounds() : null;
+    if (!bounds) return;
+    drag = { winX: bounds.x, winY: bounds.y, screenX: e.screenX, screenY: e.screenY };
+    window.__petDragging = true;   // 告诉渲染层：拖动期间不要切命中状态
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!drag || !window.smallDemon) return;
+    window.smallDemon.moveTo(
+      drag.winX + (e.screenX - drag.screenX),
+      drag.winY + (e.screenY - drag.screenY),
+    );
+  });
+  window.addEventListener('mouseup', () => { drag = null; window.__petDragging = false; });
+  window.addEventListener('contextmenu', (e) => e.preventDefault());
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && window.smallDemon) window.smallDemon.quit();
+  });
+
+  // 大肥鱼的表达式放在 EXP/ 子目录、文件名带数字前缀；这里把
+  // 「情绪名 / 中文短名」翻译成 bundle 能直接取到的文件名。
+  const EXP_BY_NAME = {
+    // 情绪（沿用 Demon 对 VTS 的映射规则）
+    happy: '02 龇牙', excited: '05 O O', shy: '04 脸红', love: '04 脸红',
+    sad: '08 担心嘴', cry: '08 担心嘴', angry: '03 脸黑', surprised: '05 O O',
+    confused: '06 X X', think: '08 栗子嘴', tease: '05 》《', dark: '03 脸黑',
+    dizzy: '06 X X', tired: '08 担心嘴', neutral: '',
+    // 中文短名
+    '龇牙': '02 龇牙', '3嘴': '02 3嘴', '脸黑': '03 脸黑', '脸红': '04 脸红',
+    'O O': '05 O O', '》《': '05 》《', 'X X': '06 X X', '流口水': '07 流口水',
+    'O嘴': '08 O嘴', '担心嘴': '08 担心嘴', '栗子嘴': '08 栗子嘴',
+    '尾巴消失': '11 尾巴消失', '耳朵消失': '12 耳朵消失',
+    '水印消除': '13 水印消除', '口型切换': '01 口型切换'
+  };
+
+  function resolveExpression(name) {
+    if (!name) return '';
+    if (name.includes('/')) return name;                    // 已是 EXP/xx 完整路径
+    if (Object.prototype.hasOwnProperty.call(EXP_BY_NAME, name)) {
+      return EXP_BY_NAME[name] ? `EXP/${EXP_BY_NAME[name]}` : '';
+    }
+    const lower = EXP_BY_NAME[name.toLowerCase()];
+    if (lower !== undefined) return lower ? `EXP/${lower}` : '';
+    return `EXP/${name}`;                                   // 兜底：当作 EXP 里的文件名
+  }
+
+  // 从本地 HTTP 服务接收指令（口型/表情的「每帧保持」在 bundle 里做）
+  try {
+    const es = new EventSource('http://127.0.0.1:8792/events');
+    es.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (!window.pet) return;
+      if (msg.type === 'expression') {
+        const name = resolveExpression(msg.name);
+        if (name) window.pet.setExpression(name);
+        else if (window.pet.clearExpression) window.pet.clearExpression();
+      }
+      if (msg.type === 'mouth') window.pet.setMouth(Math.max(0, Math.min(1, Number(msg.value) || 0)));
+      if (msg.type === 'mode') {
+        if (window.pet.setMode) window.pet.setMode(msg.mode === 'half' ? 'half' : 'full');
+      }
+      if (msg.type === 'quit' && window.smallDemon) window.smallDemon.quit();
+    };
+  } catch (err) {
+    console.warn(err);
+  }
+</script>
+</body>
+</html>
